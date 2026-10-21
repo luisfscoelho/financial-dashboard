@@ -4,6 +4,7 @@ import type { TransactionFilters, TransactionKind } from "../shared/types";
 import * as accounts from "./repos/accounts";
 import * as budgets from "./repos/budgets";
 import * as categories from "./repos/categories";
+import * as invoices from "./repos/invoices";
 import * as reports from "./repos/reports";
 import * as transactions from "./repos/transactions";
 import { assertMonth, badRequest, HttpError } from "./validation";
@@ -63,6 +64,7 @@ export function apiRoutes(db: Database) {
           category: optInt(p.get("category")),
           kind: (p.get("kind") as TransactionKind) || undefined,
           q: p.get("q") || undefined,
+          invoice: p.get("invoice") ? assertMonth(p.get("invoice"), "Fatura") : undefined,
           limit: optInt(p.get("limit")),
         };
         return transactions.listTransactions(db, f);
@@ -72,6 +74,12 @@ export function apiRoutes(db: Database) {
     "/api/transactions/:id": {
       PUT: async (r) => transactions.updateTransaction(db, id(r), await r.json()),
       DELETE: (r) => transactions.deleteTransaction(db, id(r)),
+    },
+    "/api/cards/:id/invoices": {
+      GET: (r) => invoices.listInvoices(db, id(r)),
+    },
+    "/api/cards/:id/invoices/:month/pay": {
+      POST: async (r) => invoices.payInvoice(db, id(r), r.params.month!, await r.json()),
     },
     "/api/installment-plans/:id": {
       DELETE: (r) => transactions.deleteInstallmentPlan(db, id(r)),

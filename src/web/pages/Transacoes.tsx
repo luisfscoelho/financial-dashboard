@@ -2,8 +2,9 @@ import { useState } from "react";
 import { MAX_INSTALLMENTS, type AccountWithBalance, type Category, type TransactionKind, type TransactionView } from "../../shared/types";
 import { Button, Card, Empty, ErrorBanner, Field, Input, Modal, MoneyInput, MonthPicker, PageHeader, Select } from "../components/ui";
 import { api, useData } from "../lib/api";
-import { addMonthsToDate, splitInstallments, todayISO } from "../../shared/months";
-import { formatBRL, formatDate } from "../lib/format";
+import { dueDate, invoiceMonthFor } from "../../shared/invoices";
+import { addMonths, addMonthsToDate, splitInstallments, todayISO } from "../../shared/months";
+import { formatBRL, formatDate, formatMonth, formatMonthShort } from "../lib/format";
 import { useMonth } from "../lib/month";
 
 const KIND_LABELS: Record<TransactionKind, string> = {
@@ -132,16 +133,24 @@ export function Transacoes() {
   );
 }
 
-export function TransactionTable({ rows, onSelect }: { rows: TransactionView[]; onSelect?: (t: TransactionView) => void }) {
+export function TransactionTable({
+  rows,
+  onSelect,
+  hideAccount,
+}: {
+  rows: TransactionView[];
+  onSelect?: (t: TransactionView) => void;
+  hideAccount?: boolean;
+}) {
   return (
     <div className="-mx-4 overflow-x-auto sm:-mx-5">
-      <table className="w-full min-w-[36rem] text-sm">
+      <table className={`w-full text-sm ${hideAccount ? "min-w-[28rem]" : "min-w-[36rem]"}`}>
         <thead>
           <tr className="border-b border-line text-left text-xs text-muted">
             <th className="px-4 py-2 font-medium sm:pl-5">Data</th>
             <th className="px-2 py-2 font-medium">Descrição</th>
             <th className="px-2 py-2 font-medium">Categoria</th>
-            <th className="px-2 py-2 font-medium">Conta</th>
+            {!hideAccount && <th className="px-2 py-2 font-medium">Conta</th>}
             <th className="px-4 py-2 text-right font-medium sm:pr-5">Valor</th>
           </tr>
         </thead>
@@ -176,10 +185,17 @@ export function TransactionTable({ rows, onSelect }: { rows: TransactionView[]; 
                   <span className="text-muted">Sem categoria</span>
                 )}
               </td>
-              <td className="px-2 py-2.5 whitespace-nowrap text-ink-2">
-                {t.account_name}
-                {t.to_account_name && ` → ${t.to_account_name}`}
-              </td>
+              {!hideAccount && (
+                <td className="px-2 py-2.5 whitespace-nowrap text-ink-2">
+                  {t.account_name}
+                  {t.to_account_name && ` → ${t.to_account_name}`}
+                  {t.invoice_month && t.invoice_month !== t.date.slice(0, 7) && (
+                    <span className="ml-1.5 text-xs text-muted" title={`Entra na fatura de ${formatMonth(t.invoice_month)}`}>
+                      · fatura {formatMonthShort(t.invoice_month)}
+                    </span>
+                  )}
+                </td>
+              )}
               <td
                 className={`tabular px-4 py-2.5 text-right font-medium whitespace-nowrap sm:pr-5 ${
                   t.kind === "receita" ? "text-positive" : t.kind === "despesa" ? "text-negative" : "text-ink-2"
@@ -221,7 +237,14 @@ function TransactionForm({
   const [error, setError] = useState<string | null>(null);
 
   const kindCategories = categories.filter((c) => c.kind === kind);
-  const isCard = active.find((a) => String(a.id) === accountId)?.type === "cartao";
+  const selectedAccount = active.find((a) => String(a.id) === accountId);
+  const isCard = selectedAccount?.type === "cartao";
+  const cycle =
+    isCard && kind !== "transferencia" && selectedAccount.closing_day && selectedAccount.due_day
+      ? { closing_day: selectedAccount.closing_day, due_day: selectedAccount.due_day }
+      : null;
+  // Fatura prevista (só para lançamentos novos ou quando a data muda; a edição preserva a fatura atual)
+  const invoice = cycle && date ? (tx?.invoice_month && tx.date === date ? tx.invoice_month : invoiceMonthFor(date, cycle)) : null;
   // Parcelamento só na criação de despesas no cartão
   const canSplit = !tx && kind === "despesa" && isCard;
   const count = canSplit ? installments : 1;
@@ -333,6 +356,21 @@ function TransactionForm({
             </Field>
             {count > 1 && <InstallmentPreview total={amount} count={count} firstDate={date} />}
           </div>
+        )}
+        {cycle && invoice && (
+          <p className="-mt-1 text-xs text-ink-2">
+            {count > 1 ? (
+              <>
+                Parcelas nas faturas de <strong className="text-ink">{formatMonth(invoice)}</strong> a{" "}
+                <strong className="text-ink">{formatMonth(addMonths(invoice, count - 1))}</strong>.
+              </>
+            ) : (
+              <>
+                Entra na fatura de <strong className="text-ink">{formatMonth(invoice)}</strong> (vence em{" "}
+                {formatDate(dueDate(invoice, cycle))}) e conta nesse mês.
+              </>
+            )}
+          </p>
         )}
         <Field label="Descrição">
           <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ex.: Supermercado" />

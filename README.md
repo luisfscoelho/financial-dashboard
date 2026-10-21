@@ -36,3 +36,10 @@ de cada conta mais os lançamentos até hoje; transferências movem dinheiro ent
 e informe o valor total. É criada uma transação por mês a partir da data da compra; os centavos que sobram da
 divisão ficam na 1ª parcela. Cada parcela conta no orçamento do seu mês, e as parcelas a vencer aparecem
 separadas do saldo na página Contas. Ao editar uma parcela, dá para excluir só ela ou a compra inteira.
+
+**Faturas do cartão:** configure o dia de fechamento e de vencimento na conta do cartão. A fatura leva o nome do
+mês de vencimento; compras no dia do fechamento ou depois entram na fatura seguinte, e cada compra passa a contar
+em relatórios e orçamentos no mês da fatura (o patrimônio continua pela data da compra). Parcelas caem uma por
+fatura. A página Faturas lista cada fatura com status (aberta, fechada, vencida, paga, futura) e permite registrar
+o pagamento — total ou parcial — como transferência de outra conta para o cartão. Alterar os dias redistribui as
+compras já lançadas.

@@ -1,3 +1,5 @@
+import type { InvoiceStatus } from "./invoices";
+
 export const ACCOUNT_TYPES = ["corrente", "poupanca", "cartao", "investimento", "dinheiro"] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
@@ -19,6 +21,8 @@ export interface Account {
   initial_balance_cents: number;
   archived: 0 | 1;
   created_at: string;
+  closing_day: number | null; // só cartão: dia de fechamento da fatura
+  due_day: number | null; // só cartão: dia de vencimento da fatura
 }
 
 export interface AccountWithBalance extends Account {
@@ -44,6 +48,8 @@ export interface Transaction {
   to_account_id: number | null;
   installment_plan_id: number | null;
   installment_number: number | null;
+  invoice_month: string | null; // fatura (mês de vencimento) em que a compra no cartão entra
+  invoice_payment_for: string | null; // em pagamentos de fatura: qual fatura quita
 }
 
 export interface TransactionView extends Transaction {
@@ -64,7 +70,17 @@ export interface TransactionFilters {
   category?: number;
   kind?: TransactionKind;
   q?: string;
+  invoice?: string; // YYYY-MM: só lançamentos desta fatura (use com `account`)
   limit?: number;
+}
+
+export interface Invoice {
+  month: string; // mês de vencimento
+  closing_date: string;
+  due_date: string;
+  total_cents: number; // compras − estornos
+  paid_cents: number;
+  status: InvoiceStatus;
 }
 
 export interface BudgetRow {

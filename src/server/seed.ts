@@ -3,9 +3,10 @@
  * Uso: bun run seed            (só roda se o banco não tiver transações)
  *      bun run seed --force    (apaga contas, transações e orçamentos antes)
  */
-import { addMonths, currentMonth, monthRange } from "../shared/months";
+import { addMonths, currentMonth, monthRange, todayISO } from "../shared/months";
 import { openDb } from "./db";
 import { createAccount } from "./repos/accounts";
+import { listInvoices, payInvoice } from "./repos/invoices";
 import { upsertBudget } from "./repos/budgets";
 import { listCategories } from "./repos/categories";
 import { createTransaction } from "./repos/transactions";
@@ -34,11 +35,11 @@ db.transaction(() => {
   const cat = Object.fromEntries(listCategories(db).map((c) => [c.name, c.id]));
   const corrente = createAccount(db, { name: "Conta corrente", type: "corrente", initial_balance_cents: 350_000 }).id;
   const poupanca = createAccount(db, { name: "Poupança", type: "poupanca", initial_balance_cents: 1_200_000 }).id;
-  const cartao = createAccount(db, { name: "Cartão de crédito", type: "cartao", initial_balance_cents: 0 }).id;
+  const cartao = createAccount(db, { name: "Cartão de crédito", type: "cartao", initial_balance_cents: 0, closing_day: 28, due_day: 8 }).id;
   const invest = createAccount(db, { name: "Tesouro / CDB", type: "investimento", initial_balance_cents: 2_500_000 }).id;
 
   const now = currentMonth();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const add = (t: Record<string, unknown>) => {
     if ((t.date as string) <= today) createTransaction(db, t);
   };
@@ -72,16 +73,14 @@ db.transaction(() => {
     if (rand() < 0.25)
       add({ kind: "despesa", account_id: corrente, amount_cents: between(15_000, 60_000), date: day(month, between(1, 28)), category_id: cat["Saúde"], description: "Farmácia / consulta" });
 
-    // Paga a fatura do cartão do mês anterior e guarda dinheiro
-    const prev = addMonths(month, -1);
-    const [from, to] = [`${prev}-01`, `${prev}-31`];
-    const fatura = db
-      .query<{ v: number | null }, [number, string, string]>(
-        "SELECT SUM(amount_cents) AS v FROM transactions WHERE account_id = ? AND kind = 'despesa' AND date BETWEEN ? AND ?",
-      )
-      .get(cartao, from, to)!.v;
-    if (fatura) add({ kind: "transferencia", account_id: corrente, to_account_id: cartao, amount_cents: fatura, date: day(month, 10), description: "Pagamento da fatura" });
     add({ kind: "transferencia", account_id: corrente, to_account_id: invest, amount_cents: 100_000, date: day(month, 20), description: "Aporte mensal" });
+  }
+
+  // Paga todas as faturas já vencidas, no dia do vencimento
+  for (const inv of listInvoices(db, cartao)) {
+    if (inv.due_date <= today && inv.total_cents > 0) {
+      payInvoice(db, cartao, inv.month, { account_id: corrente, amount_cents: inv.total_cents, date: inv.due_date });
+    }
   }
 
   const limits: Record<string, number> = {

@@ -20,13 +20,16 @@ export function monthBounds(month: string): [string, string] {
   return [`${month}-01`, `${month}-31`];
 }
 
+/** Dia `day` do mês, limitado ao último dia (31 em fevereiro -> 28/29). */
+export function dayInMonth(month: string, day: number): string {
+  const [y, m] = month.split("-").map(Number) as [number, number];
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return `${month}-${String(Math.min(day, last)).padStart(2, "0")}`;
+}
+
 /** Soma meses a uma data YYYY-MM-DD, ajustando o dia ao fim do mês (31/01 + 1 mês = 28/02). */
 export function addMonthsToDate(isoDate: string, delta: number): string {
-  const month = addMonths(isoDate.slice(0, 7), delta);
-  const [y, m] = month.split("-").map(Number) as [number, number];
-  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const day = Math.min(Number(isoDate.slice(8, 10)), lastDay);
-  return `${month}-${String(day).padStart(2, "0")}`;
+  return dayInMonth(addMonths(isoDate.slice(0, 7), delta), Number(isoDate.slice(8, 10)));
 }
 
 /** Data local de hoje em YYYY-MM-DD. */

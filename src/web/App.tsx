@@ -5,6 +5,7 @@ import { MonthContext } from "./lib/month";
 import { Categorias } from "./pages/Categorias";
 import { Contas } from "./pages/Contas";
 import { Dashboard } from "./pages/Dashboard";
+import { Faturas } from "./pages/Faturas";
 import { Orcamentos } from "./pages/Orcamentos";
 import { Transacoes } from "./pages/Transacoes";
 
@@ -12,6 +13,7 @@ const NAV = [
   { to: "/", label: "Visão geral", icon: "◧" },
   { to: "/transacoes", label: "Transações", icon: "⇄" },
   { to: "/contas", label: "Contas", icon: "▤" },
+  { to: "/faturas", label: "Faturas", icon: "▭" },
   { to: "/orcamentos", label: "Orçamentos", icon: "◔" },
   { to: "/categorias", label: "Categorias", icon: "◈" },
 ];
@@ -47,6 +49,7 @@ export function App() {
               <Route path="/" element={<Dashboard />} />
               <Route path="/transacoes" element={<Transacoes />} />
               <Route path="/contas" element={<Contas />} />
+              <Route path="/faturas" element={<Faturas />} />
               <Route path="/orcamentos" element={<Orcamentos />} />
               <Route path="/categorias" element={<Categorias />} />
             </Routes>

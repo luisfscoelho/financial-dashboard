@@ -1,26 +1,26 @@
 import type { Database } from "bun:sqlite";
 import type { BudgetRow } from "../../shared/types";
-import { addMonths, monthBounds } from "../../shared/months";
+import { addMonths } from "../../shared/months";
 import { asBody, assertMonth, badRequest, int, notFound } from "../validation";
 import { getCategory } from "./categories";
+import { REF_MONTH } from "./transactions";
 
-/** Uma linha por categoria de despesa: limite do mês (se houver) e quanto já foi gasto. */
+/** Uma linha por categoria de despesa: limite do mês (se houver) e quanto já foi gasto (pelo mês de referência). */
 export function listBudgets(db: Database, month: string) {
-  const [from, to] = monthBounds(month);
   return db
-    .query<BudgetRow, { month: string; from: string; to: string }>(
+    .query<BudgetRow, { month: string }>(
       `SELECT b.id, c.id AS category_id, c.name AS category_name, c.color AS category_color,
               $month AS month, b.limit_cents,
               COALESCE((
                 SELECT SUM(t.amount_cents) FROM transactions t
-                WHERE t.category_id = c.id AND t.kind = 'despesa' AND t.date BETWEEN $from AND $to
+                WHERE t.category_id = c.id AND t.kind = 'despesa' AND ${REF_MONTH()} = $month
               ), 0) AS spent_cents
        FROM categories c
        LEFT JOIN budgets b ON b.category_id = c.id AND b.month = $month
        WHERE c.kind = 'despesa'
        ORDER BY b.id IS NULL, c.name COLLATE NOCASE`,
     )
-    .all({ month, from, to });
+    .all({ month });
 }
 
 export function upsertBudget(db: Database, input: unknown) {

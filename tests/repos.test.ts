@@ -4,9 +4,11 @@ import { openDb } from "../src/server/db";
 import * as accounts from "../src/server/repos/accounts";
 import * as budgets from "../src/server/repos/budgets";
 import * as categories from "../src/server/repos/categories";
+import * as invoices from "../src/server/repos/invoices";
 import * as reports from "../src/server/repos/reports";
 import * as tx from "../src/server/repos/transactions";
 import { HttpError } from "../src/server/validation";
+import { closingDate, dueDate, invoiceMonthFor } from "../src/shared/invoices";
 import { addMonths, addMonthsToDate, monthRange, splitInstallments } from "../src/shared/months";
 
 let db: Database;
@@ -146,6 +148,108 @@ describe("compras parceladas", () => {
     const b = tx.createTransaction(db, { kind: "despesa", account_id: cartao, amount_cents: 20_000, date: "2026-10-05", installments: 2 });
     for (const r of tx.listTransactions(db)) tx.deleteTransaction(db, r.id);
     expect(() => tx.deleteInstallmentPlan(db, b.installment_plan_id!)).toThrow(HttpError);
+  });
+});
+
+describe("ciclo de fatura (regras puras)", () => {
+  test("fecha no mês anterior quando o vencimento é antes do fechamento", () => {
+    const c = { closing_day: 28, due_day: 8 };
+    expect(closingDate("2026-11", c)).toBe("2026-10-28");
+    expect(dueDate("2026-11", c)).toBe("2026-11-08");
+    expect(invoiceMonthFor("2026-10-27", c)).toBe("2026-11");
+    expect(invoiceMonthFor("2026-10-28", c)).toBe("2026-12"); // no dia do fechamento vai para a próxima
+    expect(invoiceMonthFor("2026-12-31", c)).toBe("2027-02");
+  });
+
+  test("fecha no mesmo mês quando o vencimento é depois do fechamento", () => {
+    const c = { closing_day: 3, due_day: 10 };
+    expect(closingDate("2026-10", c)).toBe("2026-10-03");
+    expect(invoiceMonthFor("2026-10-02", c)).toBe("2026-10");
+    expect(invoiceMonthFor("2026-10-03", c)).toBe("2026-11");
+  });
+
+  test("fechamento no dia 31 se ajusta a meses curtos", () => {
+    const c = { closing_day: 31, due_day: 10 };
+    expect(closingDate("2026-03", c)).toBe("2026-02-28");
+    expect(invoiceMonthFor("2026-02-27", c)).toBe("2026-03");
+    expect(invoiceMonthFor("2026-02-28", c)).toBe("2026-04");
+  });
+});
+
+describe("faturas do cartão", () => {
+  let nubank: number;
+  beforeEach(() => {
+    nubank = accounts.createAccount(db, { name: "Nubank Roxinho", type: "cartao", closing_day: 28, due_day: 8 }).id;
+  });
+
+  test("compras contam no mês da fatura em relatórios, orçamentos e filtros", () => {
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 10_000, date: "2026-10-15", category_id: cat("Lazer") });
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 20_000, date: "2026-10-29", category_id: cat("Lazer") });
+    tx.createTransaction(db, { kind: "despesa", account_id: corrente, amount_cents: 5_000, date: "2026-10-15", category_id: cat("Lazer") });
+
+    expect(reports.monthSummary(db, "2026-10").expense_cents).toBe(5_000);
+    expect(reports.monthSummary(db, "2026-11").expense_cents).toBe(10_000);
+    expect(reports.monthSummary(db, "2026-12").expense_cents).toBe(20_000);
+    expect(budgets.listBudgets(db, "2026-11").find((b) => b.category_id === cat("Lazer"))!.spent_cents).toBe(10_000);
+    expect(tx.listTransactions(db, { month: "2026-11" }).map((t) => t.amount_cents)).toEqual([10_000]);
+    // Patrimônio continua pela data da compra
+    expect(reports.monthSummary(db, "2026-10").net_worth_cents).toBe(150_000 - 35_000);
+  });
+
+  test("parcelas caem uma por fatura a partir da fatura da compra", () => {
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 30_000, date: "2026-10-30", description: "Fone", installments: 3 });
+    expect(tx.listTransactions(db, { q: "Fone" }).reverse().map((t) => t.invoice_month)).toEqual(["2026-12", "2027-01", "2027-02"]);
+  });
+
+  test("mudar o fechamento recalcula as faturas; remover o ciclo volta a contar pela data", () => {
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 10_000, date: "2026-10-15", description: "A" });
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 30_000, date: "2026-10-15", description: "P", installments: 3 });
+    accounts.updateAccount(db, nubank, { name: "Nubank", type: "cartao", closing_day: 10, due_day: 20 });
+    expect(tx.listTransactions(db, { q: "A" })[0]!.invoice_month).toBe("2026-11");
+    expect(tx.listTransactions(db, { q: "P" }).reverse().map((t) => t.invoice_month)).toEqual(["2026-11", "2026-12", "2027-01"]);
+
+    accounts.updateAccount(db, nubank, { name: "Nubank", type: "cartao" });
+    expect(tx.listTransactions(db, { account: nubank }).every((t) => t.invoice_month === null)).toBe(true);
+  });
+
+  test("lista faturas com total, pagamento e status", () => {
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 40_000, date: "2026-09-10" }); // fatura out
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 25_000, date: "2026-10-05" }); // fatura nov
+    tx.createTransaction(db, { kind: "receita", account_id: nubank, amount_cents: 5_000, date: "2026-10-06" }); // estorno nov
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 30_000, date: "2026-10-05", installments: 3 }); // nov, dez, jan
+    invoices.payInvoice(db, nubank, "2026-10", { account_id: corrente, amount_cents: 40_000, date: "2026-10-08" });
+
+    const list = invoices.listInvoices(db, nubank, "2026-10-21");
+    const by = Object.fromEntries(list.map((i) => [i.month, i]));
+    expect(list.map((i) => i.month)).toEqual(["2027-01", "2026-12", "2026-11", "2026-10"]);
+    expect(by["2026-10"]).toMatchObject({ total_cents: 40_000, paid_cents: 40_000, status: "paga", due_date: "2026-10-08" });
+    expect(by["2026-11"]).toMatchObject({ total_cents: 30_000, paid_cents: 0, status: "aberta", closing_date: "2026-10-28" });
+    expect(by["2026-12"]!.status).toBe("futura");
+    expect(invoices.listInvoices(db, nubank, "2026-11-01").find((i) => i.month === "2026-11")!.status).toBe("fechada");
+    expect(invoices.listInvoices(db, nubank, "2026-11-09").find((i) => i.month === "2026-11")!.status).toBe("vencida");
+
+    // Pagamento aparece no filtro da fatura e quita a dívida do cartão
+    expect(tx.listTransactions(db, { account: nubank, invoice: "2026-10" })).toHaveLength(2);
+    expect(accounts.listAccounts(db, { asOf: "2026-10-08" }).find((a) => a.id === nubank)!.balance_cents).toBe(-25_000 + 5_000 - 10_000);
+  });
+
+  test("editar a transação preserva o vínculo de pagamento e a fatura da parcela", () => {
+    const pay = invoices.payInvoice(db, nubank, "2026-10", { account_id: corrente, amount_cents: 1_000, date: "2026-10-08" });
+    const edited = tx.updateTransaction(db, pay.id, { kind: "transferencia", account_id: corrente, to_account_id: nubank, amount_cents: 2_000, date: "2026-10-09" });
+    expect(edited.invoice_payment_for).toBe("2026-10");
+
+    tx.createTransaction(db, { kind: "despesa", account_id: nubank, amount_cents: 20_000, date: "2026-10-30", description: "Q", installments: 2 });
+    const second = tx.listTransactions(db, { q: "Q" })[0]!;
+    const upd = tx.updateTransaction(db, second.id, { kind: "despesa", account_id: nubank, amount_cents: 9_000, date: second.date, description: "Q" });
+    expect(upd.invoice_month).toBe(second.invoice_month);
+  });
+
+  test("validações do ciclo e do pagamento", () => {
+    expect(() => accounts.createAccount(db, { name: "X", type: "cartao", closing_day: 10 })).toThrow(/fechamento e o de vencimento/);
+    expect(() => accounts.createAccount(db, { name: "X", type: "cartao", closing_day: 32, due_day: 5 })).toThrow(HttpError);
+    expect(accounts.createAccount(db, { name: "Y", type: "corrente", closing_day: 10, due_day: 20 }).closing_day).toBeNull();
+    expect(() => invoices.listInvoices(db, cartao)).toThrow(/Configure/);
+    expect(() => invoices.payInvoice(db, nubank, "2026-10", { account_id: cartao, amount_cents: 1, date: "2026-10-01" })).toThrow(HttpError);
   });
 });
 

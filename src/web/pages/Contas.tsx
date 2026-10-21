@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_LABELS, type AccountType, type AccountWithBalance } from "../../shared/types";
 import { Button, Card, Empty, ErrorBanner, Field, Input, Modal, MoneyInput, PageHeader, Select } from "../components/ui";
 import { api, useData } from "../lib/api";
@@ -53,33 +54,46 @@ export function Contas() {
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {accounts?.map((a) => (
-          <button
-            key={a.id}
-            onClick={() => setEditing(a)}
-            className={`cursor-pointer rounded-xl border border-line bg-surface p-4 text-left transition-colors hover:bg-surface-2 ${
-              a.archived ? "opacity-60" : ""
-            }`}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <div className="font-medium">{a.name}</div>
-                <div className="text-xs text-muted">
-                  {ACCOUNT_TYPE_LABELS[a.type]}
-                  {a.archived ? " · arquivada" : ""}
+          <div key={a.id} className={`flex flex-col rounded-xl border border-line bg-surface ${a.archived ? "opacity-60" : ""}`}>
+            <button
+              onClick={() => setEditing(a)}
+              className="flex flex-1 cursor-pointer flex-col rounded-xl p-4 text-left transition-colors hover:bg-surface-2"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-medium">{a.name}</div>
+                  <div className="text-xs text-muted">
+                    {ACCOUNT_TYPE_LABELS[a.type]}
+                    {a.closing_day && ` · fecha dia ${a.closing_day}, vence dia ${a.due_day}`}
+                    {a.archived ? " · arquivada" : ""}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className={`mt-4 text-2xl font-semibold ${a.balance_cents < 0 ? "text-negative" : ""}`}>
-              {formatBRL(a.balance_cents)}
-            </div>
-            {a.future_cents !== 0 && (
-              <div className="tabular mt-1 text-xs text-ink-2">
-                {a.future_cents < 0
-                  ? `${formatBRL(-a.future_cents)} em lançamentos futuros${a.type === "cartao" ? " (parcelas a vencer)" : ""}`
-                  : `+${formatBRL(a.future_cents)} em lançamentos futuros`}
+              <div className={`mt-4 text-2xl font-semibold ${a.balance_cents < 0 ? "text-negative" : ""}`}>
+                {formatBRL(a.balance_cents)}
+              </div>
+              {a.future_cents !== 0 && (
+                <div className="tabular mt-1 text-xs text-ink-2">
+                  {a.future_cents < 0
+                    ? `${formatBRL(-a.future_cents)} em lançamentos futuros${a.type === "cartao" ? " (parcelas a vencer)" : ""}`
+                    : `+${formatBRL(a.future_cents)} em lançamentos futuros`}
+                </div>
+              )}
+            </button>
+            {a.type === "cartao" && (
+              <div className="border-t border-line px-4 py-2 text-xs">
+                {a.closing_day ? (
+                  <Link to={`/faturas?cartao=${a.id}`} className="text-accent hover:underline">
+                    Ver faturas →
+                  </Link>
+                ) : (
+                  <button onClick={() => setEditing(a)} className="cursor-pointer text-ink-2 hover:text-ink">
+                    Configure o fechamento para ver as faturas
+                  </button>
+                )}
               </div>
             )}
-          </button>
+          </div>
         ))}
       </div>
 
@@ -110,11 +124,21 @@ function AccountForm({
   const [type, setType] = useState<AccountType>(account?.type ?? "corrente");
   const [initial, setInitial] = useState<number | null>(account?.initial_balance_cents ?? 0);
   const [archived, setArchived] = useState(Boolean(account?.archived));
+  const [closingDay, setClosingDay] = useState(String(account?.closing_day ?? ""));
+  const [dueDay, setDueDay] = useState(String(account?.due_day ?? ""));
   const [error, setError] = useState<string | null>(null);
+  const cycleChanged = account?.type === "cartao" && (String(account.closing_day ?? "") !== closingDay || String(account.due_day ?? "") !== dueDay);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const body = { name, type, initial_balance_cents: initial ?? 0, archived };
+    const body = {
+      name,
+      type,
+      initial_balance_cents: initial ?? 0,
+      archived,
+      closing_day: closingDay ? Number(closingDay) : null,
+      due_day: dueDay ? Number(dueDay) : null,
+    };
     try {
       if (account) await api.updateAccount(account.id, body);
       else await api.createAccount(body);
@@ -153,6 +177,23 @@ function AccountForm({
         <Field label={type === "cartao" ? "Saldo inicial (fatura em aberto = valor negativo)" : "Saldo inicial"}>
           <MoneyInput value={initial} onChange={setInitial} allowNegative />
         </Field>
+        {type === "cartao" && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Dia de fechamento">
+                <DaySelect value={closingDay} onChange={setClosingDay} />
+              </Field>
+              <Field label="Dia de vencimento">
+                <DaySelect value={dueDay} onChange={setDueDay} />
+              </Field>
+            </div>
+            <p className="-mt-1 text-xs text-ink-2">
+              Compras a partir do dia de fechamento entram na fatura seguinte, e cada compra conta nos relatórios e
+              orçamentos no mês de vencimento da fatura.
+              {cycleChanged && account && " Ao salvar, as compras já lançadas neste cartão serão redistribuídas nas faturas."}
+            </p>
+          </>
+        )}
         {account && (
           <label className="flex items-center gap-2 text-sm text-ink-2">
             <input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} />
@@ -178,5 +219,18 @@ function AccountForm({
         </div>
       </form>
     </Modal>
+  );
+}
+
+function DaySelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <Select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">—</option>
+      {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+        <option key={d} value={d}>
+          Dia {d}
+        </option>
+      ))}
+    </Select>
   );
 }

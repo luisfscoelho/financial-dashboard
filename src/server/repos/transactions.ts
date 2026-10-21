@@ -1,9 +1,16 @@
 import type { Database } from "bun:sqlite";
 import { MAX_INSTALLMENTS, type Transaction, type TransactionFilters, type TransactionView } from "../../shared/types";
-import { addMonthsToDate, monthBounds, splitInstallments } from "../../shared/months";
-import { asBody, badRequest, date, int, notFound, oneOf, str } from "../validation";
-import { getAccount } from "./accounts";
+import { invoiceMonthFor } from "../../shared/invoices";
+import { addMonths, addMonthsToDate, splitInstallments } from "../../shared/months";
+import { asBody, assertMonth, badRequest, date, int, notFound, oneOf, str } from "../validation";
+import { cardCycle, getAccount } from "./accounts";
 import { getCategory } from "./categories";
+
+/**
+ * Mês em que o lançamento conta em relatórios e orçamentos: a fatura, para compras em cartão com
+ * ciclo configurado; senão, o mês da data.
+ */
+export const REF_MONTH = (alias = "t") => `COALESCE(${alias}.invoice_month, substr(${alias}.date, 1, 7))`;
 
 const VIEW_SQL = `
   SELECT t.*, a.name AS account_name, a.type AS account_type, ta.name AS to_account_name,
@@ -20,9 +27,13 @@ export function listTransactions(db: Database, f: TransactionFilters = {}) {
   const where: string[] = [];
   const params: Record<string, string | number> = {};
   if (f.month) {
-    const [from, to] = monthBounds(f.month);
-    where.push("t.date BETWEEN $from AND $to");
-    Object.assign(params, { from, to });
+    where.push(`${REF_MONTH()} = $month`);
+    params.month = f.month;
+  }
+  if (f.invoice) {
+    // Lançamentos da fatura + pagamentos que a quitam
+    where.push("(t.invoice_month = $invoice OR t.invoice_payment_for = $invoice)");
+    params.invoice = f.invoice;
   }
   if (f.account) {
     where.push("(t.account_id = $account OR t.to_account_id = $account)");
@@ -65,13 +76,18 @@ function parse(db: Database, input: unknown) {
     description: str(body, "description", "Descrição", { optional: true }),
     category_id: null as number | null,
     to_account_id: null as number | null,
+    invoice_payment_for: null as string | null,
   };
   const account = getAccount(db, t.account_id);
 
   if (kind === "transferencia") {
     t.to_account_id = int(body, "to_account_id", "Conta de destino")!;
     if (t.to_account_id === t.account_id) throw badRequest("A conta de destino deve ser diferente da origem");
-    getAccount(db, t.to_account_id);
+    const to = getAccount(db, t.to_account_id);
+    if (body.invoice_payment_for) {
+      t.invoice_payment_for = assertMonth(body.invoice_payment_for as string, "Fatura");
+      if (!cardCycle(to)) throw badRequest("Pagamento de fatura só vale para cartão com fechamento configurado");
+    }
   } else {
     t.category_id = int(body, "category_id", "Categoria", { optional: true });
     if (t.category_id !== null) {
@@ -82,17 +98,28 @@ function parse(db: Database, input: unknown) {
   return { t, account, body };
 }
 
-type NewTransaction = ReturnType<typeof parse>["t"] & { installment_plan_id: number | null; installment_number: number | null };
+type Parsed = ReturnType<typeof parse>;
+type NewTransaction = Parsed["t"] & {
+  installment_plan_id: number | null;
+  installment_number: number | null;
+  invoice_month: string | null;
+};
 
 function insert(db: Database, t: NewTransaction) {
   return db
     .query<Pick<Transaction, "id">, NewTransaction>(
       `INSERT INTO transactions (kind, account_id, amount_cents, date, description, category_id, to_account_id,
-                                 installment_plan_id, installment_number)
+                                 installment_plan_id, installment_number, invoice_month, invoice_payment_for)
        VALUES ($kind, $account_id, $amount_cents, $date, $description, $category_id, $to_account_id,
-               $installment_plan_id, $installment_number) RETURNING id`,
+               $installment_plan_id, $installment_number, $invoice_month, $invoice_payment_for) RETURNING id`,
     )
     .get(t)!.id;
+}
+
+/** Fatura em que um lançamento entra (null se não for compra/estorno em cartão com ciclo). */
+function invoiceFor({ t, account }: Pick<Parsed, "t" | "account">): string | null {
+  const cycle = cardCycle(account);
+  return cycle && t.kind !== "transferencia" ? invoiceMonthFor(t.date, cycle) : null;
 }
 
 /**
@@ -102,7 +129,10 @@ function insert(db: Database, t: NewTransaction) {
 export function createTransaction(db: Database, input: unknown) {
   const { t, account, body } = parse(db, input);
   const installments = int(body, "installments", "Parcelas", { optional: true, min: 1 }) ?? 1;
-  if (installments === 1) return getTransaction(db, insert(db, { ...t, installment_plan_id: null, installment_number: null }));
+  const invoice = invoiceFor({ t, account });
+  if (installments === 1) {
+    return getTransaction(db, insert(db, { ...t, installment_plan_id: null, installment_number: null, invoice_month: invoice }));
+  }
 
   if (installments > MAX_INSTALLMENTS) throw badRequest(`Máximo de ${MAX_INSTALLMENTS} parcelas`);
   if (t.kind !== "despesa" || account.type !== "cartao") {
@@ -121,6 +151,8 @@ export function createTransaction(db: Database, input: unknown) {
         date: addMonthsToDate(t.date, i),
         installment_plan_id: plan,
         installment_number: i + 1,
+        // Uma parcela por fatura a partir da fatura da compra
+        invoice_month: invoice && addMonths(invoice, i),
       }),
     );
     return getTransaction(db, ids[0]!);
@@ -130,14 +162,22 @@ export function createTransaction(db: Database, input: unknown) {
 /** Edita uma única transação; uma parcela continua ligada ao plano e precisa seguir como despesa no cartão. */
 export function updateTransaction(db: Database, id: number, input: unknown) {
   const current = getTransaction(db, id);
-  const { t, account } = parse(db, input);
+  const { t, account, body } = parse(db, input);
   if (current.installment_plan_id !== null && (t.kind !== "despesa" || account.type !== "cartao")) {
     throw badRequest("Uma parcela precisa continuar como despesa no cartão de crédito");
   }
-  db.query<never, typeof t & { id: number }>(
+  // Mantém a fatura se conta e data não mudaram (preserva o deslocamento das parcelas)
+  const sameSlot = current.account_id === t.account_id && current.date === t.date && current.kind !== "transferencia";
+  const invoice_month = sameSlot && current.invoice_month && t.kind !== "transferencia" ? current.invoice_month : invoiceFor({ t, account });
+  // Pagamento de fatura: o formulário comum não envia o campo; preserva o vínculo se o destino não mudou
+  if (!("invoice_payment_for" in body) && t.kind === "transferencia" && t.to_account_id === current.to_account_id) {
+    t.invoice_payment_for = current.invoice_payment_for;
+  }
+  db.query<never, typeof t & { id: number; invoice_month: string | null }>(
     `UPDATE transactions SET kind = $kind, account_id = $account_id, amount_cents = $amount_cents, date = $date,
-     description = $description, category_id = $category_id, to_account_id = $to_account_id WHERE id = $id`,
-  ).run({ ...t, id });
+     description = $description, category_id = $category_id, to_account_id = $to_account_id,
+     invoice_month = $invoice_month, invoice_payment_for = $invoice_payment_for WHERE id = $id`,
+  ).run({ ...t, id, invoice_month });
   return getTransaction(db, id);
 }
 

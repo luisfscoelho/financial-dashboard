@@ -5,6 +5,7 @@ import type {
   CashflowPoint,
   Category,
   CategoryTotal,
+  Invoice,
   MonthSummary,
   NetWorthPoint,
   TransactionFilters,
@@ -47,6 +48,10 @@ export const api = {
   updateTransaction: (id: number, t: unknown) => request("PUT", `/transactions/${id}`, t),
   deleteTransaction: (id: number) => request("DELETE", `/transactions/${id}`),
   deleteInstallmentPlan: (id: number) => request("DELETE", `/installment-plans/${id}`),
+
+  invoices: (cardId: number) => request<Invoice[]>("GET", `/cards/${cardId}/invoices`),
+  payInvoice: (cardId: number, month: string, body: { account_id: number; amount_cents: number; date: string }) =>
+    request("POST", `/cards/${cardId}/invoices/${month}/pay`, body),
 
   budgets: (month: string) => request<BudgetRow[]>("GET", `/budgets${qs({ month })}`),
   setBudget: (b: { category_id: number; month: string; limit_cents: number }) => request("PUT", "/budgets", b),
