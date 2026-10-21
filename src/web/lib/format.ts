@@ -43,7 +43,3 @@ export function formatMonth(month: string) {
 /** "2026-10" -> "out" */
 export const formatMonthShort = (month: string) =>
   monthShortFmt.format(new Date(`${month}-01T00:00:00Z`)).replace(".", "");
-
-export function todayISO(now = new Date()) {
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-}

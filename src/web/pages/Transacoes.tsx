@@ -1,8 +1,9 @@
 import { useState } from "react";
-import type { AccountWithBalance, Category, TransactionKind, TransactionView } from "../../shared/types";
+import { MAX_INSTALLMENTS, type AccountWithBalance, type Category, type TransactionKind, type TransactionView } from "../../shared/types";
 import { Button, Card, Empty, ErrorBanner, Field, Input, Modal, MoneyInput, MonthPicker, PageHeader, Select } from "../components/ui";
 import { api, useData } from "../lib/api";
-import { formatBRL, formatDate, todayISO } from "../lib/format";
+import { addMonthsToDate, splitInstallments, todayISO } from "../../shared/months";
+import { formatBRL, formatDate } from "../lib/format";
 import { useMonth } from "../lib/month";
 
 const KIND_LABELS: Record<TransactionKind, string> = {
@@ -152,7 +153,17 @@ export function TransactionTable({ rows, onSelect }: { rows: TransactionView[]; 
               className={`border-b border-line last:border-0 ${onSelect ? "cursor-pointer hover:bg-surface-2" : ""}`}
             >
               <td className="tabular px-4 py-2.5 whitespace-nowrap text-ink-2 sm:pl-5">{formatDate(t.date)}</td>
-              <td className="px-2 py-2.5">{t.description || <span className="text-muted">—</span>}</td>
+              <td className="px-2 py-2.5">
+                {t.description || (!t.installment_plan_id && <span className="text-muted">—</span>)}
+                {t.installment_plan_id && (
+                  <span
+                    className="tabular ml-1.5 rounded bg-surface-2 px-1.5 py-0.5 text-xs whitespace-nowrap text-ink-2"
+                    title={`Parcela ${t.installment_number} de ${t.installment_total}`}
+                  >
+                    {t.installment_number}/{t.installment_total}
+                  </span>
+                )}
+              </td>
               <td className="px-2 py-2.5 whitespace-nowrap">
                 {t.kind === "transferencia" ? (
                   <span className="text-ink-2">Transferência</span>
@@ -206,9 +217,14 @@ function TransactionForm({
   const [toAccountId, setToAccountId] = useState(String(tx?.to_account_id ?? active[1]?.id ?? ""));
   const [categoryId, setCategoryId] = useState(String(tx?.category_id ?? ""));
   const [description, setDescription] = useState(tx?.description ?? "");
+  const [installments, setInstallments] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   const kindCategories = categories.filter((c) => c.kind === kind);
+  const isCard = active.find((a) => String(a.id) === accountId)?.type === "cartao";
+  // Parcelamento só na criação de despesas no cartão
+  const canSplit = !tx && kind === "despesa" && isCard;
+  const count = canSplit ? installments : 1;
 
   async function save(again: boolean) {
     if (!amount || amount <= 0) return setError("Informe um valor maior que zero");
@@ -218,6 +234,7 @@ function TransactionForm({
       date,
       account_id: Number(accountId),
       description,
+      ...(count > 1 && { installments: count }),
       ...(kind === "transferencia"
         ? { to_account_id: Number(toAccountId) }
         : { category_id: categoryId ? Number(categoryId) : null }),
@@ -229,6 +246,7 @@ function TransactionForm({
       if (again) {
         setAmount(null);
         setDescription("");
+        setInstallments(1);
       }
       onSaved(again);
     } catch (err) {
@@ -236,8 +254,19 @@ function TransactionForm({
     }
   }
 
+  async function removePlan() {
+    if (!tx?.installment_plan_id) return;
+    if (!confirm(`Excluir todas as ${tx.installment_total} parcelas desta compra?`)) return;
+    try {
+      await api.deleteInstallmentPlan(tx.installment_plan_id);
+      onSaved(false);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   async function remove() {
-    if (!tx || !confirm("Excluir esta transação?")) return;
+    if (!tx || !confirm(tx.installment_plan_id ? "Excluir somente esta parcela?" : "Excluir esta transação?")) return;
     try {
       await api.deleteTransaction(tx.id);
       onSaved(false);
@@ -256,6 +285,17 @@ function TransactionForm({
         className="flex flex-col gap-3"
       >
         <ErrorBanner message={error} />
+        {tx?.installment_plan_id && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2 text-sm">
+            <span className="text-ink-2">
+              Parcela <strong className="text-ink">{tx.installment_number}</strong> de {tx.installment_total} · compra de{" "}
+              {formatBRL(tx.installment_plan_total_cents ?? 0)}. As alterações valem só para esta parcela.
+            </span>
+            <Button type="button" variant="danger" className="px-2 py-1 text-xs" onClick={removePlan}>
+              Excluir todas as parcelas
+            </Button>
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-2 p-1">
           {(Object.keys(KIND_LABELS) as TransactionKind[]).map((k) => (
             <button
@@ -272,13 +312,28 @@ function TransactionForm({
           ))}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Valor">
+          <Field label={count > 1 ? "Valor total da compra" : "Valor"}>
             <MoneyInput value={amount} onChange={setAmount} required autoFocus />
           </Field>
-          <Field label="Data">
+          <Field label={count > 1 ? "Data da 1ª parcela" : "Data"}>
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           </Field>
         </div>
+        {canSplit && (
+          <div className="grid grid-cols-2 items-end gap-3">
+            <Field label="Parcelas">
+              <Select value={installments} onChange={(e) => setInstallments(Number(e.target.value))}>
+                <option value={1}>À vista</option>
+                {Array.from({ length: MAX_INSTALLMENTS - 1 }, (_, i) => i + 2).map((n) => (
+                  <option key={n} value={n}>
+                    {n}x
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {count > 1 && <InstallmentPreview total={amount} count={count} firstDate={date} />}
+          </div>
+        )}
         <Field label="Descrição">
           <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ex.: Supermercado" />
         </Field>
@@ -346,5 +401,26 @@ function TransactionForm({
         </div>
       </form>
     </Modal>
+  );
+}
+
+function InstallmentPreview({ total, count, firstDate }: { total: number | null; count: number; firstDate: string }) {
+  if (!total || total < count) return <p className="pb-2 text-xs text-muted">Informe o valor total</p>;
+  const [first, other] = splitInstallments(total, count) as [number, number];
+  return (
+    <p className="pb-1 text-xs leading-relaxed text-ink-2">
+      {first === other ? (
+        <>
+          <strong className="tabular text-ink">{count}x</strong> de <strong className="tabular text-ink">{formatBRL(other)}</strong>
+        </>
+      ) : (
+        <>
+          1ª de <strong className="tabular text-ink">{formatBRL(first)}</strong> + {count - 1}x de{" "}
+          <strong className="tabular text-ink">{formatBRL(other)}</strong>
+        </>
+      )}
+      <br />
+      Última em {formatDate(addMonthsToDate(firstDate, count - 1))}
+    </p>
   );
 }

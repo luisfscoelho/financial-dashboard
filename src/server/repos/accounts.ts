@@ -1,33 +1,34 @@
 import type { Database } from "bun:sqlite";
+import { todayISO } from "../../shared/months";
 import { ACCOUNT_TYPES, type Account, type AccountWithBalance } from "../../shared/types";
 import { asBody, badRequest, int, notFound, oneOf, str } from "../validation";
 
 /**
- * Saldo = saldo inicial + receitas − despesas − transferências enviadas + transferências recebidas,
- * considerando apenas lançamentos com data <= :asOf.
+ * Movimento líquido da conta = receitas − despesas − transferências enviadas + transferências recebidas,
+ * considerando apenas lançamentos cuja data satisfaz `cond` (ex.: "<= $asOf").
  */
-const BALANCE_SQL = `
-  a.initial_balance_cents
+const movement = (cond: string) => `
+  COALESCE((
+    SELECT SUM(CASE WHEN t.kind = 'receita' THEN t.amount_cents ELSE -t.amount_cents END)
+    FROM transactions t WHERE t.account_id = a.id AND t.date ${cond}
+  ), 0)
   + COALESCE((
-      SELECT SUM(CASE WHEN t.kind = 'receita' THEN t.amount_cents ELSE -t.amount_cents END)
-      FROM transactions t WHERE t.account_id = a.id AND t.date <= $asOf
-    ), 0)
-  + COALESCE((
-      SELECT SUM(t.amount_cents) FROM transactions t WHERE t.to_account_id = a.id AND t.date <= $asOf
-    ), 0)
+    SELECT SUM(t.amount_cents) FROM transactions t WHERE t.to_account_id = a.id AND t.date ${cond}
+  ), 0)
 `;
 
-const FAR_FUTURE = "9999-12-31";
-
+/** Saldo até `asOf` (padrão: hoje) e, separado, o total de lançamentos futuros (ex.: parcelas a vencer). */
 export function listAccounts(db: Database, opts: { includeArchived?: boolean; asOf?: string } = {}) {
   return db
     .query<AccountWithBalance, { asOf: string; all: number }>(
-      `SELECT a.*, ${BALANCE_SQL} AS balance_cents
+      `SELECT a.*,
+              a.initial_balance_cents + ${movement("<= $asOf")} AS balance_cents,
+              ${movement("> $asOf")} AS future_cents
        FROM accounts a
        WHERE $all = 1 OR a.archived = 0
        ORDER BY a.archived, a.name COLLATE NOCASE`,
     )
-    .all({ asOf: opts.asOf ?? FAR_FUTURE, all: opts.includeArchived ? 1 : 0 });
+    .all({ asOf: opts.asOf ?? todayISO(), all: opts.includeArchived ? 1 : 0 });
 }
 
 export function getAccount(db: Database, id: number) {

@@ -7,7 +7,7 @@ import * as categories from "../src/server/repos/categories";
 import * as reports from "../src/server/repos/reports";
 import * as tx from "../src/server/repos/transactions";
 import { HttpError } from "../src/server/validation";
-import { addMonths, monthRange } from "../src/shared/months";
+import { addMonths, addMonthsToDate, monthRange, splitInstallments } from "../src/shared/months";
 
 let db: Database;
 let corrente: number;
@@ -89,6 +89,66 @@ describe("validação de transações", () => {
   });
 });
 
+describe("compras parceladas", () => {
+  test("cria uma parcela por mês, com os centavos restantes na primeira", () => {
+    const first = tx.createTransaction(db, {
+      kind: "despesa", account_id: cartao, amount_cents: 100_000, date: "2026-01-31",
+      category_id: cat("Compras"), description: "Notebook", installments: 3,
+    });
+    expect(first.installment_number).toBe(1);
+    expect(first.installment_total).toBe(3);
+    expect(first.installment_plan_total_cents).toBe(100_000);
+
+    const rows = tx.listTransactions(db, { q: "Notebook" }).reverse();
+    expect(rows.map((r) => [r.date, r.amount_cents, r.installment_number])).toEqual([
+      ["2026-01-31", 33_334, 1],
+      ["2026-02-28", 33_333, 2],
+      ["2026-03-31", 33_333, 3],
+    ]);
+    expect(new Set(rows.map((r) => r.installment_plan_id)).size).toBe(1);
+  });
+
+  test("cada parcela conta no orçamento do seu mês", () => {
+    tx.createTransaction(db, { kind: "despesa", account_id: cartao, amount_cents: 60_000, date: "2026-09-10", category_id: cat("Compras"), installments: 6 });
+    for (const month of ["2026-09", "2026-10", "2027-02"]) {
+      expect(budgets.listBudgets(db, month).find((b) => b.category_id === cat("Compras"))!.spent_cents).toBe(10_000);
+    }
+    expect(budgets.listBudgets(db, "2027-03").find((b) => b.category_id === cat("Compras"))!.spent_cents).toBe(0);
+  });
+
+  test("saldo do cartão separa parcelas já lançadas das futuras", () => {
+    tx.createTransaction(db, { kind: "despesa", account_id: cartao, amount_cents: 30_000, date: "2026-09-10", installments: 3 });
+    const card = accounts.listAccounts(db, { asOf: "2026-09-30" }).find((a) => a.id === cartao)!;
+    expect(card.balance_cents).toBe(-10_000);
+    expect(card.future_cents).toBe(-20_000);
+  });
+
+  test("só permite parcelar despesas no cartão", () => {
+    const base = { amount_cents: 10_000, date: "2026-10-01", installments: 2 };
+    expect(() => tx.createTransaction(db, { ...base, kind: "despesa", account_id: corrente })).toThrow(/cartão/);
+    expect(() => tx.createTransaction(db, { ...base, kind: "receita", account_id: cartao })).toThrow(/cartão/);
+    expect(() => tx.createTransaction(db, { ...base, kind: "despesa", account_id: cartao, installments: 49 })).toThrow(HttpError);
+    expect(() => tx.createTransaction(db, { ...base, kind: "despesa", account_id: cartao, amount_cents: 1 })).toThrow(HttpError);
+  });
+
+  test("editar uma parcela não afeta as outras e não pode virar outro tipo", () => {
+    const first = tx.createTransaction(db, { kind: "despesa", account_id: cartao, amount_cents: 20_000, date: "2026-10-05", description: "TV", installments: 2 });
+    tx.updateTransaction(db, first.id, { kind: "despesa", account_id: cartao, amount_cents: 12_000, date: "2026-10-05", description: "TV" });
+    expect(tx.listTransactions(db, { q: "TV" }).map((r) => r.amount_cents).sort()).toEqual([10_000, 12_000]);
+    expect(() => tx.updateTransaction(db, first.id, { kind: "despesa", account_id: corrente, amount_cents: 1, date: "2026-10-05" })).toThrow(/cartão/);
+  });
+
+  test("excluir o plano remove todas as parcelas; excluir a última parcela remove o plano", () => {
+    const a = tx.createTransaction(db, { kind: "despesa", account_id: cartao, amount_cents: 30_000, date: "2026-10-05", installments: 3 });
+    tx.deleteInstallmentPlan(db, a.installment_plan_id!);
+    expect(tx.listTransactions(db)).toHaveLength(0);
+
+    const b = tx.createTransaction(db, { kind: "despesa", account_id: cartao, amount_cents: 20_000, date: "2026-10-05", installments: 2 });
+    for (const r of tx.listTransactions(db)) tx.deleteTransaction(db, r.id);
+    expect(() => tx.deleteInstallmentPlan(db, b.installment_plan_id!)).toThrow(HttpError);
+  });
+});
+
 describe("orçamentos", () => {
   test("calcula gasto do mês vs limite e copia do mês anterior", () => {
     const alim = cat("Alimentação");
@@ -166,5 +226,16 @@ describe("meses", () => {
     expect(addMonths("2026-01", -1)).toBe("2025-12");
     expect(addMonths("2026-12", 1)).toBe("2027-01");
     expect(monthRange("2026-02", 3)).toEqual(["2025-12", "2026-01", "2026-02"]);
+  });
+
+  test("addMonthsToDate ajusta o dia ao fim do mês", () => {
+    expect(addMonthsToDate("2026-01-31", 1)).toBe("2026-02-28");
+    expect(addMonthsToDate("2028-01-31", 1)).toBe("2028-02-29");
+    expect(addMonthsToDate("2026-11-15", 2)).toBe("2027-01-15");
+  });
+
+  test("splitInstallments soma exatamente o total", () => {
+    expect(splitInstallments(1000, 3)).toEqual([334, 333, 333]);
+    expect(splitInstallments(999, 3)).toEqual([333, 333, 333]);
   });
 });

@@ -22,7 +22,8 @@ export interface Account {
 }
 
 export interface AccountWithBalance extends Account {
-  balance_cents: number;
+  balance_cents: number; // saldo até hoje
+  future_cents: number; // lançamentos com data futura (ex.: parcelas a vencer), com sinal
 }
 
 export interface Category {
@@ -41,14 +42,21 @@ export interface Transaction {
   date: string; // YYYY-MM-DD
   description: string;
   to_account_id: number | null;
+  installment_plan_id: number | null;
+  installment_number: number | null;
 }
 
 export interface TransactionView extends Transaction {
   account_name: string;
+  account_type: AccountType;
   to_account_name: string | null;
   category_name: string | null;
   category_color: string | null;
+  installment_total: number | null; // número de parcelas do plano
+  installment_plan_total_cents: number | null; // valor total da compra parcelada
 }
+
+export const MAX_INSTALLMENTS = 48;
 
 export interface TransactionFilters {
   month?: string; // YYYY-MM

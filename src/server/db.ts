@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import schema from "./schema.sql" with { type: "text" };
+import m001 from "./migrations/001-inicial.sql" with { type: "text" };
+import m002 from "./migrations/002-parcelas.sql" with { type: "text" };
 
 // Cada item é uma migração; a posição no array é a versão (PRAGMA user_version).
-const MIGRATIONS: string[] = [schema];
+const MIGRATIONS: string[] = [m001, m002];
 
 export const DEFAULT_DB_PATH = new URL("../../data/financas.db", import.meta.url).pathname;
 

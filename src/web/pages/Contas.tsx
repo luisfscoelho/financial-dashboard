@@ -72,6 +72,13 @@ export function Contas() {
             <div className={`mt-4 text-2xl font-semibold ${a.balance_cents < 0 ? "text-negative" : ""}`}>
               {formatBRL(a.balance_cents)}
             </div>
+            {a.future_cents !== 0 && (
+              <div className="tabular mt-1 text-xs text-ink-2">
+                {a.future_cents < 0
+                  ? `${formatBRL(-a.future_cents)} em lançamentos futuros${a.type === "cartao" ? " (parcelas a vencer)" : ""}`
+                  : `+${formatBRL(a.future_cents)} em lançamentos futuros`}
+              </div>
+            )}
           </button>
         ))}
       </div>

@@ -73,6 +73,9 @@ export function apiRoutes(db: Database) {
       PUT: async (r) => transactions.updateTransaction(db, id(r), await r.json()),
       DELETE: (r) => transactions.deleteTransaction(db, id(r)),
     },
+    "/api/installment-plans/:id": {
+      DELETE: (r) => transactions.deleteInstallmentPlan(db, id(r)),
+    },
     "/api/budgets": {
       GET: (_r, url) => budgets.listBudgets(db, monthParam(url)),
       PUT: async (r) => budgets.upsertBudget(db, await r.json()),

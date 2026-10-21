@@ -46,6 +46,7 @@ export const api = {
   createTransaction: (t: unknown) => request("POST", "/transactions", t),
   updateTransaction: (id: number, t: unknown) => request("PUT", `/transactions/${id}`, t),
   deleteTransaction: (id: number) => request("DELETE", `/transactions/${id}`),
+  deleteInstallmentPlan: (id: number) => request("DELETE", `/installment-plans/${id}`),
 
   budgets: (month: string) => request<BudgetRow[]>("GET", `/budgets${qs({ month })}`),
   setBudget: (b: { category_id: number; month: string; limit_cents: number }) => request("PUT", "/budgets", b),
