@@ -4,8 +4,11 @@ import type { TransactionFilters, TransactionKind } from "../shared/types";
 import * as accounts from "./repos/accounts";
 import * as budgets from "./repos/budgets";
 import * as categories from "./repos/categories";
+import * as goals from "./repos/goals";
+import * as ideal from "./repos/ideal";
 import * as invoices from "./repos/invoices";
 import * as reports from "./repos/reports";
+import * as subscriptions from "./repos/subscriptions";
 import * as transactions from "./repos/transactions";
 import { assertMonth, badRequest, HttpError } from "./validation";
 
@@ -93,6 +96,29 @@ export function apiRoutes(db: Database) {
     },
     "/api/budgets/:id": {
       DELETE: (r) => budgets.deleteBudget(db, id(r)),
+    },
+    "/api/goals": {
+      GET: () => goals.listGoals(db),
+      POST: async (r) => goals.createGoal(db, await r.json()),
+    },
+    "/api/goals/:id": {
+      PUT: async (r) => goals.updateGoal(db, id(r), await r.json()),
+      DELETE: (r) => goals.deleteGoal(db, id(r)),
+    },
+    "/api/ideal": {
+      GET: (_r, url) => ideal.idealReport(db, monthParam(url)),
+      PUT: async (r) => ideal.setSplit(db, await r.json()),
+    },
+    "/api/subscriptions": {
+      GET: () => subscriptions.listSubscriptions(db),
+      POST: async (r) => subscriptions.createSubscription(db, await r.json()),
+    },
+    "/api/subscriptions/:id": {
+      PUT: async (r) => subscriptions.updateSubscription(db, id(r), await r.json()),
+      DELETE: (r) => subscriptions.deleteSubscription(db, id(r)),
+    },
+    "/api/subscriptions/:id/launch": {
+      POST: async (r) => subscriptions.launchSubscription(db, id(r), await r.json().catch(() => ({}))),
     },
     "/api/reports/summary": { GET: (_r, url) => reports.monthSummary(db, monthParam(url)) },
     "/api/reports/by-category": {

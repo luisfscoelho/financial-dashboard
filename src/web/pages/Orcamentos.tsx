@@ -1,6 +1,6 @@
 import { useState } from "react";
-import type { BudgetRow } from "../../shared/types";
-import { BudgetBar, budgetStatus, Button, Card, Empty, ErrorBanner, MoneyInput, MonthPicker, PageHeader } from "../components/ui";
+import { IDEAL_BUCKET_LABELS, IDEAL_BUCKETS, type BudgetRow, type IdealBucket } from "../../shared/types";
+import { BudgetBar, budgetStatus, Button, Card, Empty, ErrorBanner, Field, Input, MoneyInput, MonthPicker, PageHeader } from "../components/ui";
 import { api, useData } from "../lib/api";
 import { formatBRL } from "../lib/format";
 import { useMonth } from "../lib/month";
@@ -43,6 +43,8 @@ export function Orcamentos() {
         <Button onClick={copyPrevious}>Copiar do mês anterior</Button>
       </PageHeader>
       <ErrorBanner message={error ?? actionError} />
+
+      <IdealCard month={month} editable className="mb-5" />
 
       {budgeted.length > 0 && (
         <Card className="mb-5">
@@ -189,6 +191,142 @@ function LimitEditor({ initial, onSave, onCancel }: { initial: number | null; on
       <Button type="button" variant="ghost" className="text-xs" onClick={onCancel}>
         Cancelar
       </Button>
+    </form>
+  );
+}
+
+/**
+ * Divisão ideal da renda do mês (ex.: 50/30/20) × realizado. Investimento acima da meta é bom;
+ * gastos acima da meta, não.
+ */
+export function IdealCard({ month, editable, className }: { month: string; editable?: boolean; className?: string }) {
+  const { data, error, reload } = useData(() => api.ideal(month), [month]);
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <Card
+      title="Ideal da renda"
+      className={className}
+      action={
+        editable &&
+        data &&
+        !editing && (
+          <Button variant="ghost" className="px-2 text-xs" onClick={() => setEditing(true)}>
+            Editar %
+          </Button>
+        )
+      }
+    >
+      <ErrorBanner message={error} />
+      {data && editing ? (
+        <SplitEditor
+          initial={Object.fromEntries(data.rows.map((r) => [r.bucket, r.pct])) as Record<IdealBucket, number>}
+          onCancel={() => setEditing(false)}
+          onSaved={() => {
+            setEditing(false);
+            reload();
+          }}
+        />
+      ) : data && data.income_cents === 0 ? (
+        <Empty>Sem receitas neste mês para calcular a divisão.</Empty>
+      ) : (
+        data && (
+          <>
+            <div className="mb-3 text-sm text-ink-2">
+              Renda do mês: <span className="tabular font-medium text-ink">{formatBRL(data.income_cents)}</span>
+            </div>
+            <ul className="flex flex-col gap-4">
+              {data.rows.map((r) => {
+                const isInvest = r.bucket === "investimento";
+                const actualPct = data.income_cents > 0 ? (r.actual_cents / data.income_cents) * 100 : 0;
+                const diff = r.actual_cents - r.target_cents;
+                const good = isInvest ? diff >= 0 : diff <= 0;
+                return (
+                  <li key={r.bucket}>
+                    <div className="mb-1 flex flex-wrap justify-between gap-2 text-sm">
+                      <span className="font-medium">
+                        {IDEAL_BUCKET_LABELS[r.bucket]} <span className="font-normal text-muted">· ideal {r.pct}%</span>
+                      </span>
+                      <span className="tabular text-ink-2">
+                        {formatBRL(r.actual_cents)} <span className="text-muted">/ {formatBRL(r.target_cents)}</span>
+                      </span>
+                    </div>
+                    {isInvest ? <IdealInvestBar actual={r.actual_cents} target={r.target_cents} /> : <BudgetBar spent={r.actual_cents} limit={r.target_cents} />}
+                    <div className="mt-1 flex justify-between text-xs text-ink-2">
+                      <span className="tabular">{Math.round(actualPct)}% da renda</span>
+                      <span className={`tabular ${good ? "text-positive" : "text-negative"}`}>
+                        {isInvest
+                          ? diff >= 0
+                            ? `✓ ${formatBRL(diff)} acima da meta`
+                            : `Faltam ${formatBRL(-diff)}`
+                          : diff <= 0
+                            ? `✓ Sobram ${formatBRL(-diff)}`
+                            : `▲ ${formatBRL(diff)} acima do ideal`}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )
+      )}
+    </Card>
+  );
+}
+
+function IdealInvestBar({ actual, target }: { actual: number; target: number }) {
+  const pct = target > 0 ? Math.max(actual, 0) / target : 0;
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuenow={Math.round(pct * 100)} aria-valuemin={0} aria-valuemax={100}>
+      <div className="h-full rounded-full bg-[var(--good)] transition-all" style={{ width: `${Math.min(pct, 1) * 100}%` }} />
+    </div>
+  );
+}
+
+function SplitEditor({ initial, onSaved, onCancel }: { initial: Record<IdealBucket, number>; onSaved: () => void; onCancel: () => void }) {
+  const [values, setValues] = useState(initial);
+  const [error, setError] = useState<string | null>(null);
+  const sum = IDEAL_BUCKETS.reduce((s, b) => s + (values[b] || 0), 0);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await api.setIdealSplit(values);
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      <ErrorBanner message={error} />
+      <div className="grid grid-cols-3 gap-3">
+        {IDEAL_BUCKETS.map((b) => (
+          <Field key={b} label={`${IDEAL_BUCKET_LABELS[b]} (%)`}>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={values[b]}
+              onChange={(e) => setValues({ ...values, [b]: Math.trunc(Number(e.target.value)) })}
+            />
+          </Field>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={`text-xs ${sum === 100 ? "text-ink-2" : "text-negative"}`}>Soma: {sum}% {sum !== 100 && "(precisa ser 100%)"}</span>
+        <div className="flex gap-2">
+          <Button type="button" variant="ghost" className="text-xs" onClick={onCancel}>
+            Cancelar
+          </Button>
+          <Button type="submit" variant="primary" className="text-xs" disabled={sum !== 100}>
+            Salvar
+          </Button>
+        </div>
+      </div>
+      <p className="text-xs text-muted">Escolha se cada categoria de despesa é "fixo" ou "livre" na tela de Categorias.</p>
     </form>
   );
 }

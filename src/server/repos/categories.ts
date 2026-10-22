@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { Category } from "../../shared/types";
+import { CATEGORY_BUCKETS, type Category } from "../../shared/types";
 import { asBody, badRequest, color, notFound, oneOf, str } from "../validation";
 
 export function listCategories(db: Database) {
@@ -14,10 +14,13 @@ export function getCategory(db: Database, id: number) {
 
 function parse(input: unknown) {
   const body = asBody(input);
+  const kind = oneOf(body, "kind", "Tipo", ["receita", "despesa"] as const);
   return {
     name: str(body, "name", "Nome"),
-    kind: oneOf(body, "kind", "Tipo", ["receita", "despesa"] as const),
+    kind,
     color: color(body, "color"),
+    // Despesas sem grupo informado entram como "livre" no Ideal
+    bucket: kind === "despesa" ? (body.bucket ? oneOf(body, "bucket", "Grupo", CATEGORY_BUCKETS) : "livre") : null,
   };
 }
 
@@ -30,7 +33,7 @@ export function createCategory(db: Database, input: unknown) {
   const c = parse(input);
   try {
     return db
-      .query<Category, typeof c>("INSERT INTO categories (name, kind, color) VALUES ($name, $kind, $color) RETURNING *")
+      .query<Category, typeof c>("INSERT INTO categories (name, kind, color, bucket) VALUES ($name, $kind, $color, $bucket) RETURNING *")
       .get(c)!;
   } catch (e) {
     rethrowUnique(e);
@@ -49,7 +52,7 @@ export function updateCategory(db: Database, id: number, input: unknown) {
   try {
     return db
       .query<Category, typeof c & { id: number }>(
-        "UPDATE categories SET name = $name, kind = $kind, color = $color WHERE id = $id RETURNING *",
+        "UPDATE categories SET name = $name, kind = $kind, color = $color, bucket = $bucket WHERE id = $id RETURNING *",
       )
       .get({ ...c, id })!;
   } catch (e) {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Category, CategoryKind } from "../../shared/types";
+import type { Category, CategoryBucket, CategoryKind } from "../../shared/types";
 import { Button, Card, ErrorBanner, Field, Input, Modal, PageHeader, Select } from "../components/ui";
 import { api, useData } from "../lib/api";
 
@@ -41,6 +41,7 @@ export function Categorias() {
                     >
                       <span className="size-3 rounded-full" style={{ background: c.color }} />
                       {c.name}
+                      {c.bucket && <span className="ml-auto text-xs text-muted">{c.bucket === "fixo" ? "Fixo" : "Livre"}</span>}
                     </button>
                   </li>
                 ))}
@@ -78,13 +79,15 @@ function CategoryForm({
   const [name, setName] = useState(category?.name ?? "");
   const [kind, setKind] = useState<CategoryKind>(category?.kind ?? defaultKind);
   const [color, setColor] = useState(category?.color ?? PALETTE[0]!);
+  const [bucket, setBucket] = useState<CategoryBucket>(category?.bucket ?? "livre");
   const [error, setError] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     try {
-      if (category) await api.updateCategory(category.id, { name, kind, color });
-      else await api.createCategory({ name, kind, color });
+      const body = { name, kind, color, bucket };
+      if (category) await api.updateCategory(category.id, body);
+      else await api.createCategory(body);
       onSaved();
     } catch (err) {
       setError((err as Error).message);
@@ -115,6 +118,14 @@ function CategoryForm({
             <option value="receita">Receita</option>
           </Select>
         </Field>
+        {kind === "despesa" && (
+          <Field label="Grupo no Ideal">
+            <Select value={bucket} onChange={(e) => setBucket(e.target.value as CategoryBucket)}>
+              <option value="fixo">Gastos fixos</option>
+              <option value="livre">Livre</option>
+            </Select>
+          </Field>
+        )}
         <Field label="Cor">
           <div className="flex flex-wrap items-center gap-2">
             {PALETTE.map((c) => (

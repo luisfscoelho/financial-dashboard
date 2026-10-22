@@ -9,6 +9,8 @@ import { createAccount } from "./repos/accounts";
 import { listInvoices, payInvoice } from "./repos/invoices";
 import { upsertBudget } from "./repos/budgets";
 import { listCategories } from "./repos/categories";
+import { createGoal } from "./repos/goals";
+import { createSubscription } from "./repos/subscriptions";
 import { createTransaction } from "./repos/transactions";
 
 const db = openDb();
@@ -23,6 +25,8 @@ if (n > 0 && !force) {
 db.transaction(() => {
   if (force) {
     db.run("DELETE FROM budgets");
+    db.run("DELETE FROM goals");
+    db.run("DELETE FROM subscriptions");
     db.run("DELETE FROM transactions");
     db.run("DELETE FROM accounts");
   }
@@ -93,7 +97,20 @@ db.transaction(() => {
   };
   for (const month of [addMonths(now, -1), now])
     for (const [name, limit_cents] of Object.entries(limits)) upsertBudget(db, { category_id: cat[name], month, limit_cents });
+
+  createGoal(db, { name: "Reserva de emergência", target_cents: 1_237_662, account_id: poupanca });
+  createGoal(db, { name: "Aposentadoria", target_cents: 41_255_400, account_id: invest });
+
+  const subs: [string, number, number][] = [
+    ["Proton", 38_000, 2],
+    ["Estadão", 21_500, 6],
+    ["Spotify", 22_000, 6],
+    ["Claude", 110_000, 10],
+    ["YouTube", 27_000, 11],
+  ];
+  for (const [name, amount_cents, renewal_month] of subs)
+    createSubscription(db, { name, amount_cents, period: "anual", renewal_month, account_id: cartao, category_id: cat["Contas e serviços"] });
 })();
 
 const total = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM transactions").get()!.n;
-console.log(`Dados de exemplo criados: 4 contas, ${total} transações e orçamentos para os 2 últimos meses.`);
+console.log(`Dados de exemplo criados: 4 contas, ${total} transações, orçamentos para os 2 últimos meses, metas e assinaturas.`);

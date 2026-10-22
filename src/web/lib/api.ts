@@ -5,9 +5,13 @@ import type {
   CashflowPoint,
   Category,
   CategoryTotal,
+  GoalView,
+  IdealBucket,
+  IdealReport,
   Invoice,
   MonthSummary,
   NetWorthPoint,
+  SubscriptionView,
   TransactionFilters,
   TransactionView,
 } from "../../shared/types";
@@ -57,6 +61,20 @@ export const api = {
   setBudget: (b: { category_id: number; month: string; limit_cents: number }) => request("PUT", "/budgets", b),
   deleteBudget: (id: number) => request("DELETE", `/budgets/${id}`),
   copyBudgets: (month: string) => request<{ copied: number }>("POST", `/budgets/copy-previous${qs({ month })}`),
+
+  goals: () => request<GoalView[]>("GET", "/goals"),
+  createGoal: (g: unknown) => request("POST", "/goals", g),
+  updateGoal: (id: number, g: unknown) => request("PUT", `/goals/${id}`, g),
+  deleteGoal: (id: number) => request("DELETE", `/goals/${id}`),
+
+  ideal: (month: string) => request<IdealReport>("GET", `/ideal${qs({ month })}`),
+  setIdealSplit: (split: Record<IdealBucket, number>) => request("PUT", "/ideal", split),
+
+  subscriptions: () => request<SubscriptionView[]>("GET", "/subscriptions"),
+  createSubscription: (s: unknown) => request("POST", "/subscriptions", s),
+  updateSubscription: (id: number, s: unknown) => request("PUT", `/subscriptions/${id}`, s),
+  deleteSubscription: (id: number) => request("DELETE", `/subscriptions/${id}`),
+  launchSubscription: (id: number, date?: string) => request("POST", `/subscriptions/${id}/launch`, { date }),
 
   summary: (month: string) => request<MonthSummary>("GET", `/reports/summary${qs({ month })}`),
   byCategory: (month: string, kind: "receita" | "despesa" = "despesa") =>

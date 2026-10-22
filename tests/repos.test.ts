@@ -4,12 +4,16 @@ import { openDb } from "../src/server/db";
 import * as accounts from "../src/server/repos/accounts";
 import * as budgets from "../src/server/repos/budgets";
 import * as categories from "../src/server/repos/categories";
+import * as goals from "../src/server/repos/goals";
+import * as ideal from "../src/server/repos/ideal";
 import * as invoices from "../src/server/repos/invoices";
 import * as reports from "../src/server/repos/reports";
+import * as subscriptions from "../src/server/repos/subscriptions";
 import * as tx from "../src/server/repos/transactions";
 import { HttpError } from "../src/server/validation";
 import { closingDate, dueDate, invoiceMonthFor } from "../src/shared/invoices";
 import { addMonths, addMonthsToDate, monthRange, splitInstallments } from "../src/shared/months";
+import { annualCost, renewingIn } from "../src/shared/subscriptions";
 
 let db: Database;
 let corrente: number;
@@ -322,6 +326,96 @@ describe("relatórios", () => {
     const nw = reports.netWorthSeries(db, "2026-10", 4);
     expect(nw.map((p) => p.net_worth_cents)).toEqual([150_000, 450_000, 450_000, 845_000]);
     expect(nw.at(-1)!.net_worth_cents).toBe(reports.monthSummary(db, "2026-10").net_worth_cents);
+  });
+});
+
+describe("metas", () => {
+  test("valor atual acompanha o saldo da conta vinculada", () => {
+    const g = goals.createGoal(db, { name: "Reserva", target_cents: 200_000, account_id: poupanca, target_month: "2027-06" });
+    expect(g.current_cents).toBe(50_000);
+    expect(g.account_name).toBe("Poupança");
+    tx.createTransaction(db, { kind: "transferencia", account_id: corrente, to_account_id: poupanca, amount_cents: 30_000, date: "2026-01-10" });
+    expect(goals.listGoals(db)[0]!.current_cents).toBe(80_000);
+  });
+
+  test("conta vinculada a uma meta não pode ser excluída", () => {
+    const conta = accounts.createAccount(db, { name: "Caixinha", type: "investimento" }).id;
+    const g = goals.createGoal(db, { name: "Viagem", target_cents: 100_000, account_id: conta });
+    expect(() => accounts.deleteAccount(db, conta)).toThrow(/vinculada a uma meta/);
+    goals.deleteGoal(db, g.id);
+    accounts.deleteAccount(db, conta);
+  });
+
+  test("valida valor e prazo", () => {
+    expect(() => goals.createGoal(db, { name: "X", target_cents: 0, account_id: poupanca })).toThrow(HttpError);
+    expect(() => goals.createGoal(db, { name: "X", target_cents: 100, account_id: poupanca, target_month: "2027-13" })).toThrow(HttpError);
+  });
+});
+
+describe("ideal", () => {
+  test("compara a divisão ideal da renda com o realizado", () => {
+    const invest = accounts.createAccount(db, { name: "CDB", type: "investimento" }).id;
+    const semCategoria = { kind: "despesa", account_id: corrente, amount_cents: 10_000, date: "2026-10-20" };
+    tx.createTransaction(db, { kind: "receita", account_id: corrente, amount_cents: 400_000, date: "2026-10-05", category_id: cat("Salário") });
+    tx.createTransaction(db, { kind: "despesa", account_id: corrente, amount_cents: 150_000, date: "2026-10-06", category_id: cat("Moradia") });
+    tx.createTransaction(db, { kind: "despesa", account_id: corrente, amount_cents: 50_000, date: "2026-10-07", category_id: cat("Lazer") });
+    tx.createTransaction(db, semCategoria);
+    // Aporte, resgate parcial e movimentação entre contas de investimento (não conta)
+    tx.createTransaction(db, { kind: "transferencia", account_id: corrente, to_account_id: invest, amount_cents: 100_000, date: "2026-10-10" });
+    tx.createTransaction(db, { kind: "transferencia", account_id: invest, to_account_id: corrente, amount_cents: 20_000, date: "2026-10-15" });
+    tx.createTransaction(db, { kind: "transferencia", account_id: invest, to_account_id: poupanca, amount_cents: 5_000, date: "2026-10-16" });
+
+    const r = ideal.idealReport(db, "2026-10");
+    expect(r.income_cents).toBe(400_000);
+    expect(r.rows).toEqual([
+      { bucket: "fixo", pct: 50, target_cents: 200_000, actual_cents: 150_000 },
+      { bucket: "livre", pct: 30, target_cents: 120_000, actual_cents: 60_000 },
+      { bucket: "investimento", pct: 20, target_cents: 80_000, actual_cents: 80_000 },
+    ]);
+  });
+
+  test("respeita o grupo escolhido na categoria", () => {
+    const lazer = categories.listCategories(db).find((c) => c.name === "Lazer")!;
+    categories.updateCategory(db, lazer.id, { ...lazer, bucket: "fixo" });
+    tx.createTransaction(db, { kind: "despesa", account_id: corrente, amount_cents: 7_000, date: "2026-10-07", category_id: lazer.id });
+    expect(ideal.idealReport(db, "2026-10").rows.find((x) => x.bucket === "fixo")!.actual_cents).toBe(7_000);
+  });
+
+  test("percentuais precisam somar 100", () => {
+    expect(() => ideal.setSplit(db, { fixo: 50, livre: 30, investimento: 10 })).toThrow(/somar 100/);
+    expect(ideal.setSplit(db, { fixo: 60, livre: 20, investimento: 20 })).toEqual({ fixo: 60, livre: 20, investimento: 20 });
+  });
+});
+
+describe("assinaturas", () => {
+  test("custo anual, renovação e validação do período", () => {
+    subscriptions.createSubscription(db, { name: "Spotify", amount_cents: 22_000, period: "anual", renewal_month: 6, account_id: cartao });
+    subscriptions.createSubscription(db, { name: "Vivo", amount_cents: 3_000, period: "mensal", account_id: corrente });
+    const off = subscriptions.createSubscription(db, { name: "Antiga", amount_cents: 9_900, period: "anual", renewal_month: 6, active: false });
+    const list = subscriptions.listSubscriptions(db);
+    expect(annualCost(list)).toBe(22_000 + 36_000);
+    expect(renewingIn(list, "2026-06").map((s) => s.name)).toEqual(["Spotify"]);
+    expect(off.active).toBe(0);
+    expect(() => subscriptions.createSubscription(db, { name: "X", amount_cents: 100, period: "anual" })).toThrow(HttpError);
+  });
+
+  test("lançar cria a despesa e entra na fatura do cartão", () => {
+    accounts.updateAccount(db, cartao, { name: "Cartão", type: "cartao", closing_day: 28, due_day: 8 });
+    const s = subscriptions.createSubscription(db, {
+      name: "Claude",
+      amount_cents: 110_000,
+      period: "anual",
+      renewal_month: 10,
+      account_id: cartao,
+      category_id: cat("Contas e serviços"),
+    });
+    const t = subscriptions.launchSubscription(db, s.id, { date: "2026-10-29" });
+    expect(t).toMatchObject({ kind: "despesa", amount_cents: 110_000, description: "Claude", invoice_month: "2026-12" });
+  });
+
+  test("sem conta não dá para lançar", () => {
+    const s = subscriptions.createSubscription(db, { name: "X", amount_cents: 100, period: "mensal" });
+    expect(() => subscriptions.launchSubscription(db, s.id)).toThrow(/Defina a conta/);
   });
 });
 

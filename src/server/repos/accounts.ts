@@ -132,5 +132,7 @@ export function deleteAccount(db: Database, id: number) {
     )
     .get(id, id)!;
   if (n > 0) throw badRequest(`A conta possui ${n} transação(ões). Arquive-a em vez de excluir.`);
+  const goals = db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM goals WHERE account_id = ?").get(id)!.n;
+  if (goals > 0) throw badRequest("A conta está vinculada a uma meta. Remova ou altere a meta antes de excluir.");
   db.query("DELETE FROM accounts WHERE id = ?").run(id);
 }

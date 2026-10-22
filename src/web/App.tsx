@@ -2,10 +2,12 @@ import { useState } from "react";
 import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
 import { currentMonth } from "../shared/months";
 import { MonthContext } from "./lib/month";
+import { Assinaturas } from "./pages/Assinaturas";
 import { Categorias } from "./pages/Categorias";
 import { Contas } from "./pages/Contas";
 import { Dashboard } from "./pages/Dashboard";
 import { Faturas } from "./pages/Faturas";
+import { Metas } from "./pages/Metas";
 import { Orcamentos } from "./pages/Orcamentos";
 import { Transacoes } from "./pages/Transacoes";
 
@@ -15,6 +17,8 @@ const NAV = [
   { to: "/contas", label: "Contas", icon: "▤" },
   { to: "/faturas", label: "Faturas", icon: "▭" },
   { to: "/orcamentos", label: "Orçamentos", icon: "◔" },
+  { to: "/metas", label: "Metas", icon: "◎" },
+  { to: "/assinaturas", label: "Assinaturas", icon: "↻" },
   { to: "/categorias", label: "Categorias", icon: "◈" },
 ];
 
@@ -51,6 +55,8 @@ export function App() {
               <Route path="/contas" element={<Contas />} />
               <Route path="/faturas" element={<Faturas />} />
               <Route path="/orcamentos" element={<Orcamentos />} />
+              <Route path="/metas" element={<Metas />} />
+              <Route path="/assinaturas" element={<Assinaturas />} />
               <Route path="/categorias" element={<Categorias />} />
             </Routes>
           </main>

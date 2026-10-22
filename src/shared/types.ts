@@ -30,11 +30,15 @@ export interface AccountWithBalance extends Account {
   future_cents: number; // lançamentos com data futura (ex.: parcelas a vencer), com sinal
 }
 
+export const CATEGORY_BUCKETS = ["fixo", "livre"] as const;
+export type CategoryBucket = (typeof CATEGORY_BUCKETS)[number];
+
 export interface Category {
   id: number;
   name: string;
   kind: CategoryKind;
   color: string;
+  bucket: CategoryBucket | null; // só despesa: grupo no Ideal (gastos fixos ou livres)
 }
 
 export interface Transaction {
@@ -117,4 +121,58 @@ export interface CashflowPoint {
 export interface NetWorthPoint {
   month: string;
   net_worth_cents: number;
+}
+
+export interface Goal {
+  id: number;
+  name: string;
+  target_cents: number;
+  account_id: number;
+  target_month: string | null; // YYYY-MM
+}
+
+export interface GoalView extends Goal {
+  account_name: string;
+  current_cents: number; // saldo atual da conta vinculada
+}
+
+export const IDEAL_BUCKETS = ["fixo", "livre", "investimento"] as const;
+export type IdealBucket = (typeof IDEAL_BUCKETS)[number];
+
+export const IDEAL_BUCKET_LABELS: Record<IdealBucket, string> = {
+  fixo: "Gastos fixos",
+  livre: "Livre",
+  investimento: "Investimento",
+};
+
+export interface IdealRow {
+  bucket: IdealBucket;
+  pct: number; // % ideal da renda
+  target_cents: number; // renda do mês × pct
+  actual_cents: number;
+}
+
+export interface IdealReport {
+  month: string;
+  income_cents: number;
+  rows: IdealRow[];
+}
+
+export type SubscriptionPeriod = "mensal" | "anual";
+
+export interface Subscription {
+  id: number;
+  name: string;
+  amount_cents: number;
+  period: SubscriptionPeriod;
+  renewal_month: number | null; // 1–12, só anual
+  account_id: number | null;
+  category_id: number | null;
+  active: 0 | 1;
+}
+
+export interface SubscriptionView extends Subscription {
+  account_name: string | null;
+  category_name: string | null;
+  category_color: string | null;
 }

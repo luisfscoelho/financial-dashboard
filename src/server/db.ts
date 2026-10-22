@@ -4,9 +4,10 @@ import { dirname } from "node:path";
 import m001 from "./migrations/001-inicial.sql" with { type: "text" };
 import m002 from "./migrations/002-parcelas.sql" with { type: "text" };
 import m003 from "./migrations/003-fechamento-cartao.sql" with { type: "text" };
+import m004 from "./migrations/004-metas-ideal-assinaturas.sql" with { type: "text" };
 
 // Cada item é uma migração; a posição no array é a versão (PRAGMA user_version).
-const MIGRATIONS: string[] = [m001, m002, m003];
+const MIGRATIONS: string[] = [m001, m002, m003, m004];
 
 export const DEFAULT_DB_PATH = new URL("../../data/financas.db", import.meta.url).pathname;
 

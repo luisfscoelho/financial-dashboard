@@ -6,6 +6,7 @@ import { BudgetBar, budgetStatus, Button, Card, Empty, ErrorBanner, MonthPicker,
 import { api, useData } from "../lib/api";
 import { formatBRL, formatMonth } from "../lib/format";
 import { useMonth } from "../lib/month";
+import { IdealCard } from "./Orcamentos";
 import { TransactionTable } from "./Transacoes";
 
 export function Dashboard() {
@@ -118,6 +119,8 @@ export function Dashboard() {
           )}
         </Card>
       </div>
+
+      <IdealCard month={month} className="mb-5" />
 
       <Card
         title="Últimas transações"
